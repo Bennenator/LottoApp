@@ -87,8 +87,6 @@ def registerUser(username, password, confirmpassword, name, home_address, phone_
     st.session_state.Username = username
     return "Registration successfull!", 1
 
-# This function is the callback function for adding a drawing to the DrawingsDB and notifying winners and 
-# runnning a report on how much that drawing cost the TLC in payouts
 
 #---------------------------------------------------------#
 #------- Here marks where front-end begins (kinda) -------#
