@@ -1,7 +1,6 @@
 import streamlit as st
 from pymongo import MongoClient
 import bcrypt
-import numpy as np
 from datetime import datetime, timedelta
 
 # Connect to the MongoDB server
@@ -29,6 +28,8 @@ if "admin" not in st.session_state:
     st.session_state.admin = False
 if "refreshReady" not in st.session_state:
     st.session_state.refreshReady = False
+if "redeemingTicket" not in st.session_state:
+    st.session_state.redeemingTicket = None
 
 # This helper function can be used as a callback on buttons to update states if you need to.
 # Takes in a dictionary of key-value pairs and updates the session state accordingly
@@ -88,6 +89,23 @@ def registerUser(username, password, confirmpassword, name, home_address, phone_
     return "Registration successfull!", 1
 
 
+# Here is a callback function that clears the data or inserts random data
+
+def mongoDBhandler(collections, call_type="None"):
+    collection_list = ["users", "tickets", "drawings", "admin", "winners"]
+    for collection in collections:
+        if collection in collection_list:
+            if call_type == "Delete":
+                LottoDB[collection].delete_many({})
+            
+
+# Here is a callback function that is used when redeeming tickets online to update 
+# state to show the redeeming portal and also pass in the necessary ticket data
+def sendToRedeeming(ticket):
+    st.session_state.redeemingTicket = ticket
+                        
+
+
 #---------------------------------------------------------#
 #------- Here marks where front-end begins (kinda) -------#
 #---------------------------------------------------------#
@@ -107,6 +125,12 @@ if st.session_state.loggedIn == True:
         st.write(f"Welcome, {st.session_state.Username}! {'(admin)' if st.session_state.admin else ''}")
 
         st.button("Logout", on_click=callbackUpdater, args=[{"Username":None, "loggedIn":False, "admin":False}])
+
+        if st.session_state.admin == True:
+            checked = st.toggle("Delete data?")
+            if checked:
+                if st.button("CLEAR DATA", on_click=mongoDBhandler, args=[["tickets", "drawings", "winners"], "Delete"]):
+                    st.write("Data cleared!")
 
     # This if block is specifically for the admin page
     if st.session_state.admin == True:
@@ -136,21 +160,28 @@ if st.session_state.loggedIn == True:
                         if good:
                             DrawingsDB.insert_one({"username": st.session_state.Username, "ticket_numbers": ticketNumbers, "ticket_type": ticket_type, "date": datetime.today()})
                             st.write("Drawing submitted!")
-                            winner_winner_tickets = list(TicketsDB.find({"ticket_type" : ticket_type}))
-                            st.write(winner_winner_tickets)
+                            winner_winner_tickets = list(TicketsDB.find({"ticket_type" : ticket_type, "ticket_status" : "Not Yet Drawn"}))
                             payouts = {}
                             for ticket in winner_winner_tickets:
                                 winner = ticket["username"]
                                 payout = float(ticket["payout"])
                                 matching_nums = [entry for entry in ticketNumbers if entry in ticket["ticket_numbers"]]
                                 percentages_list = [0, 0.01, 0.05, 0.20, 1]
-                                payout *= percentages_list[len(matching_nums) - 1]
-                                if payout:
-                                    TicketsDB.update_one({"_id": ticket["_id"]}, {"$set": {"ticket_status": f"You won! Your winnings are: ${payout}."}})
+                                if len(matching_nums):
+                                    payout *= percentages_list[len(matching_nums) - 1]
+                                else:
+                                    payout = 0
+                                num_string = ''
+                                for num in ticketNumbers:
+                                    num_string += str(num) + ' '
+                                if payout and ticket["ticket_status"] == "Not Yet Drawn":
+                                    TicketsDB.update_one({"_id": ticket["_id"]}, {"$set": {"ticket_status": f"You won! Your winnings are: ${payout}. Drawing made on {datetime.today()} with the following numbers: {num_string}"}})
                                     payout_dict = {"username": winner, "payout": payout, "original_nums": ticket["ticket_numbers"], "drawing_nums": ticketNumbers, "matching_nums": matching_nums, "date": datetime.today()}
                                     WinnersDB.insert_one(payout_dict)
                                     payouts[winner] = payout_dict
-                                
+                                else:
+                                    TicketsDB.update_one({"_id": ticket["_id"]}, {"$set": {"ticket_status": f"No match. Better luck next time! Drawing made on {datetime.today()} with the following numbers: {num_string}"}})
+                                    
                         else:
                             st.write("Please enter a number for each entry!")
                             good = True
@@ -165,8 +196,9 @@ if st.session_state.loggedIn == True:
                 dTime = int(time_period.split(" ")[0])
                 winners = WinnersDB.find({"date" : {"$gte": datetime.now() - timedelta(days=dTime)}})
                 purchased_tickets = TicketsDB.find({"date" : {"$gte": datetime.now() - timedelta(days=dTime)}})
+                pendings = TicketsDB.find({"date" : {"$gte": datetime.now() - timedelta(days=dTime)}, "ticket_status" : {"$text" : {"$search" : "\'You claimed\'"}}})
             
-            payoutsTab, revenueTab = st.tabs(["View Winning Ticket Payouts", "View Purchased Ticket Revenue"])
+            payoutsTab, revenueTab, pendingTab = st.tabs(["View Paid Out Winning Ticket", "View Purchased Ticket Revenue", "View Un-Paid Winning Tickets"])
             with payoutsTab:
                 totalPayouts = 0
                 displayinfocols = st.columns(3)
@@ -184,7 +216,7 @@ if st.session_state.loggedIn == True:
                     displayinfocols[0].write(ticket["username"])
                     displayinfocols[1].write(ticket["price"])
                     displayinfocols[2].write(ticket["date"])
-                    totalRevenue += winner["price"]
+                    totalRevenue += ticket["price"]
                 st.write(f"Total revenue in the selected period: ${totalRevenue}")
                 
         
@@ -211,75 +243,103 @@ if st.session_state.loggedIn == True:
         purchaseTab, inventoryTab, previousNumbersTab, profileTab = st.tabs(["Browse", "Inventory", "View Previous Winning Numbers", "View Profile"])
 
         with inventoryTab:
-            myTickets = list(TicketsDB.find({"username": st.session_state.Username}))
-            if st.button("Refresh") and st.session_state.refreshReady:
-                st.session_state.refreshReady = False
-                st.rerun()
-            if st.session_state.refreshReady == False:
-                st.session_state.refreshReady = True
-            if len(myTickets) == 0:
-                st.write("You have no tickets!")
-            else:
-                ticketColumns = st.columns(5)
-                for ticket in myTickets:
-                    with ticketColumns[0]:
-                        st.write("Ticket Type: ", ticket["ticket_type"])
-                    with ticketColumns[1]:
-                        st.write("Ticket ID: ", ticket["_id"])
-                    with ticketColumns[2]:
-                        st.write("Ticket Numbers: ", ticket["ticket_numbers"])
-                    with ticketColumns[3]:
-                        st.write("Ticket Status: ",  ticket["ticket_status"])
-                    if "winnings" in ticket["ticket_status"]:
-                        if ticket["payout"] > 599: 
-                            with ticketColumns[4]:
-                                st.write(f"To claim winnings of over $599, please bring your ticket id to your nearest TLC office. Your ticket id is {ticket['_id']}")
+            # Check to see if the user is redeeming a ticket or not
+            if st.session_state.redeemingTicket:
+                # If there is a ticket currently being redeemed, then handle it.
+                st.write("Winning ticket info:")
+                winning_ticket_cols = st.columns(3)
+                winning_ticket_cols[0].write("ticket type")
+                winning_ticket_cols[0].write(st.session_state.redeemingTicket["ticket_type"])
+                winning_ticket_cols[1].write("ticket id")
+                winning_ticket_cols[1].write(st.session_state.redeemingTicket["_id"])
+                winning_ticket_cols[2].write('payout')
+                winning_ticket_cols[2].write(f"{st.session_state.redeemingTicket['payout']}0")
+                with st.form(f"Claim winnnings of {st.session_state.redeemingTicket['payout']}0 online"):
+                    
+                    credit_debitTab, paypalTab = st.tabs(["Deposit to bank", "Deposit to Paypal"])
+                    with credit_debitTab:
+                        st.write("Credit/Debit")
+                        ccnumCols = st.columns(4)
+                        credit_debit_number1 = ccnumCols[0].text_input("ccnums1", max_chars=4, placeholder="XXXX",label_visibility="collapsed")
+                        credit_debit_number2 = ccnumCols[1].text_input("ccnums2", max_chars=4, placeholder="XXXX",label_visibility="collapsed")
+                        credit_debit_number3 = ccnumCols[2].text_input("ccnums3", max_chars=4, placeholder="XXXX",label_visibility="collapsed")
+                        credit_debit_number4 = ccnumCols[3].text_input("ccnums4", max_chars=4, placeholder="XXXX",label_visibility="collapsed")
+                        ccinfoCols = st.columns([.5, .25, .25])
+                        credit_debit_exp = ccinfoCols[0].text_input("Expiration Date", placeholder="MM/YY", max_chars=5)
+                        credit_debit_cvv = ccinfoCols[1].text_input("CVV", placeholder="XXX", max_chars=3)
+                        credit_debit_zip = ccinfoCols[2].text_input("Zip Code", placeholder="XXXXX", max_chars=5)
+                    
+                    with paypalTab:
+                        paypal_email = st.text_input("Paypal Email")
+                        paypal_password = st.text_input("Paypal Password", type="password")
+
+                    goodCC = False
+                    goodPP = False
+                    chose_bank = False
+                    if st.form_submit_button(f"Claim ${st.session_state.redeemingTicket['payout']}0 now!"):
+                        if len(credit_debit_number1) == 4 and len(credit_debit_number2) == 4 and len(credit_debit_number3) == 4 and len(credit_debit_number4) == 4 and len(credit_debit_exp) == 5 and len(credit_debit_cvv) == 3 and len(credit_debit_zip) == 5:
+                            goodCC = True
+                            chose_bank = True
+                        
+                        if "@" in paypal_email and "." in paypal_email and len(paypal_password) > 0:
+                            goodPP = True
+                            chose_bank = False
+                            goodCC = False
+
+                        if goodCC or goodPP:
+                            good = True
+
+                        if goodCC:
+                            TicketsDB.update_one({"_id": st.session_state.redeemingTicket["_id"]}, {"$set": {"ticket_status": f"You won and claimed ${st.session_state.redeemingTicket['payout']}0 To bank using card XXXX-XXXX-XXXX-{credit_debit_number4} on {datetime.today()}."}})
+                            st.write("Winnings claimed! Please allow up to 72 hours for your bank to receive your winnings.")
+                            st.session_state.redeemingTicket = None
+                            st.rerun()
+                        elif goodPP:
+                            TicketsDB.update_one({"_id": st.session_state.redeemingTicket["_id"]}, {"$set": {"ticket_status": f"You won and claimed ${st.session_state.redeemingTicket['payout']}0 To paypal belonging to {paypal_email} on {datetime.today()}."}})
+                            st.write("Winnings claimed! Please allow up to 72 hours for PayPal to receive your winnings.")
+                            st.session_state.redeemingTicket = None
+                            st.rerun()
                         else:
-                            with ticketColumns[4]:
-                                with st.form("Claim winnnings online"):
-                                    credit_debitTab, paypalTab = st.tabs(["Pay with Credit/Debit", "Pay with Paypal"])
-                                    with credit_debitTab:
-                                        st.write("Credit/Debit")
-                                        ccnumCols = st.columns(4)
-                                        credit_debit_number1 = ccnumCols[0].text_input("ccnums1", max_chars=4, placeholder="XXXX",label_visibility="collapsed")
-                                        credit_debit_number2 = ccnumCols[1].text_input("ccnums2", max_chars=4, placeholder="XXXX",label_visibility="collapsed")
-                                        credit_debit_number3 = ccnumCols[2].text_input("ccnums3", max_chars=4, placeholder="XXXX",label_visibility="collapsed")
-                                        credit_debit_number4 = ccnumCols[3].text_input("ccnums4", max_chars=4, placeholder="XXXX",label_visibility="collapsed")
-                                        ccinfoCols = st.columns([.5, .25, .25])
-                                        credit_debit_exp = ccinfoCols[0].text_input("Expiration Date", placeholder="MM/YY", max_chars=5)
-                                        credit_debit_cvv = ccinfoCols[1].text_input("CVV", placeholder="XXX", max_chars=3)
-                                        credit_debit_zip = ccinfoCols[2].text_input("Zip Code", placeholder="XXXXX", max_chars=5)
-                                    
-                                    with paypalTab:
-                                        paypal_email = st.text_input("Paypal Email")
-                                        paypal_password = st.text_input("Paypal Password", type="password")
-
-                                    goodCC = False
-                                    goodPP = False
-                                    chose_bank = False
-                                    if st.form_submit_button(f"Claim ${ticket['payout']}.0 now!"):
-                                        if len(credit_debit_number1) == 4 and len(credit_debit_number2) == 4 and len(credit_debit_number3) == 4 and len(credit_debit_number4) == 4 and len(credit_debit_exp) == 5 and len(credit_debit_cvv) == 3 and len(credit_debit_zip) == 5:
-                                            goodCC = True
-                                            chose_bank = True
-                                        
-                                        if "@" in paypal_email and "." in paypal_email and len(paypal_password) > 0:
-                                            goodPP = True
-                                            chose_bank = False
-                                            goodCC = False
-
-                                        if goodCC or goodPP:
-                                            good = True
-
-                                        if goodCC:
-                                            TicketsDB.update_one({"_id": ticket["_id"]}, {"$set": {"ticket_status": f"You claimed ${ticket['payout']}0 To bank using card XXXX-XXXX-XXXX-{credit_debit_number4} on {datetime.today()}."}})
-                                            st.write("Winnings claimed! Please allow up to 72 hours for your bank to receive your winnings.")
-                                        elif goodPP:
-                                            TicketsDB.update_one({"_id": ticket["_id"]}, {"$set": {"ticket_status": f"You claimed ${ticket['payout']}0 To paypal belonging to {paypal_email} on {datetime.today()}."}})
-                                            st.write("Winnings claimed! Please allow up to 72 hours for PayPal to receive your winnings.")
-                                        else:
-                                            st.write("Please enter all valid info!")
-                                            good = True
-            
+                            st.write("Please enter all valid info!")
+                            good = True
+            else:
+                # This means that the user is in the inventory tab but not redeeming a ticket
+                myTickets = list(TicketsDB.find({"username": st.session_state.Username}))
+                if st.button("Refresh") and st.session_state.refreshReady:
+                    st.session_state.refreshReady = False
+                    st.rerun()
+                if st.session_state.refreshReady == False:
+                    st.session_state.refreshReady = True
+                if len(myTickets) == 0:
+                    st.write("You have no tickets!")
+                else:
+                    ticketColumns = []
+                    ticket_containers = []
+                    for ticket in myTickets:
+                        ticket_containers.append(st.container())
+                        with ticket_containers[-1]:
+                            ticketColumns.append(st.columns(5))
+                            with ticketColumns[-1][0]:
+                                st.write("Ticket Type: ")
+                                st.write(ticket["ticket_type"])
+                            with ticketColumns[-1][1]:
+                                st.write("Ticket ID: ")
+                                st.write(ticket["_id"])
+                            with ticketColumns[-1][2]:
+                                st.write("Ticket Numbers: ")
+                                nums = [str(i) for i in ticket["ticket_numbers"]]
+                                st.write(", ".join(nums))
+                            with ticketColumns[-1][3]:
+                                st.write("Ticket Status: ")
+                                st.write(ticket["ticket_status"])
+                            if "winnings" in ticket["ticket_status"]:
+                                if ticket["payout"] > 599: 
+                                    with ticketColumns[-1][4]:
+                                        st.write(f"To claim winnings of over $599, please bring your ticket id to your nearest TLC office. Your ticket id is {ticket['_id']}")
+                                else:
+                                    with ticketColumns[-1][4]:
+                                        go_to_redeem = st.button(f"Redeem ${ticket['payout']}0 online!", on_click=sendToRedeeming, args=[ticket])
+                
         with purchaseTab:
             ticket_list = []
             for ticket in AdminDB.find():
