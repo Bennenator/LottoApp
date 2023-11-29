@@ -176,7 +176,7 @@ if st.session_state.loggedIn == True:
                                     num_string += str(num) + ' '
                                 if payout and ticket["ticket_status"] == "Not Yet Drawn":
                                     TicketsDB.update_one({"_id": ticket["_id"]}, {"$set": {"ticket_status": f"You won! Your winnings are: ${payout}. Drawing made on {datetime.today()} with the following numbers: {num_string}"}})
-                                    payout_dict = {"username": winner, "payout": payout, "original_nums": ticket["ticket_numbers"], "drawing_nums": ticketNumbers, "matching_nums": matching_nums, "date": datetime.today()}
+                                    payout_dict = {"username": winner, "ticket_id": ticket["_id"], "payout": payout, "paid": False, "original_nums": ticket["ticket_numbers"], "drawing_nums": ticketNumbers, "matching_nums": matching_nums, "date": datetime.today()}
                                     WinnersDB.insert_one(payout_dict)
                                     payouts[winner] = payout_dict
                                 else:
@@ -194,9 +194,9 @@ if st.session_state.loggedIn == True:
                 purchased_tickets = TicketsDB.find()
             else:
                 dTime = int(time_period.split(" ")[0])
-                winners = WinnersDB.find({"date" : {"$gte": datetime.now() - timedelta(days=dTime)}})
+                winners = WinnersDB.find({"date" : {"$gte": datetime.now() - timedelta(days=dTime)}, "paid" : True})
                 purchased_tickets = TicketsDB.find({"date" : {"$gte": datetime.now() - timedelta(days=dTime)}})
-                pendings = TicketsDB.find({"date" : {"$gte": datetime.now() - timedelta(days=dTime)}, "ticket_status" : {"$text" : {"$search" : "\'You claimed\'"}}})
+                pendings = WinnersDB.find({"date" : {"$gte": datetime.now() - timedelta(days=dTime)}, "paid" : False})
             
             payoutsTab, revenueTab, pendingTab = st.tabs(["View Paid Out Winning Ticket", "View Purchased Ticket Revenue", "View Un-Paid Winning Tickets"])
             with payoutsTab:
@@ -207,7 +207,7 @@ if st.session_state.loggedIn == True:
                     displayinfocols[1].write(winner["payout"])
                     displayinfocols[2].write(winner["date"])
                     totalPayouts += winner["payout"]
-                st.write(f"Total payouts in the selected period: ${totalPayouts}")
+                st.write(f"Total paid payouts in the selected period: ${totalPayouts}")
             
             with revenueTab:
                 totalRevenue = 0
@@ -218,6 +218,16 @@ if st.session_state.loggedIn == True:
                     displayinfocols[2].write(ticket["date"])
                     totalRevenue += ticket["price"]
                 st.write(f"Total revenue in the selected period: ${totalRevenue}")
+
+            with pendingTab:
+                totalPendings = 0
+                displayinfocols = st.columns(3)
+                for pender in pendings:
+                    displayinfocols[0].write(pender["username"])
+                    displayinfocols[1].write(pender["payout"])
+                    displayinfocols[2].write(pender["date"])
+                    totalPendings += pender["payout"]
+                st.write(f"Total pending payouts in the selected period: ${totalPendings}")
                 
         
         with manageTicketTab:
@@ -291,17 +301,20 @@ if st.session_state.loggedIn == True:
 
                         if goodCC:
                             TicketsDB.update_one({"_id": st.session_state.redeemingTicket["_id"]}, {"$set": {"ticket_status": f"You won and claimed ${st.session_state.redeemingTicket['payout']}0 To bank using card XXXX-XXXX-XXXX-{credit_debit_number4} on {datetime.today()}."}})
+                            WinnersDB.update_one({"ticket_id": st.session_state.redeemingTicket["_id"]}, {"$set": {"paid": True}})
                             st.write("Winnings claimed! Please allow up to 72 hours for your bank to receive your winnings.")
                             st.session_state.redeemingTicket = None
                             st.rerun()
                         elif goodPP:
                             TicketsDB.update_one({"_id": st.session_state.redeemingTicket["_id"]}, {"$set": {"ticket_status": f"You won and claimed ${st.session_state.redeemingTicket['payout']}0 To paypal belonging to {paypal_email} on {datetime.today()}."}})
+                            WinnersDB.update_one({"ticket_id": st.session_state.redeemingTicket["_id"]}, {"$set": {"paid": True}})
                             st.write("Winnings claimed! Please allow up to 72 hours for PayPal to receive your winnings.")
                             st.session_state.redeemingTicket = None
                             st.rerun()
                         else:
                             st.write("Please enter all valid info!")
                             good = True
+                go_back_button = st.button("Cancel redemtion", on_click=lambda: setattr(st.session_state, 'redeemingTicket', None))
             else:
                 # This means that the user is in the inventory tab but not redeeming a ticket
                 myTickets = list(TicketsDB.find({"username": st.session_state.Username}))
