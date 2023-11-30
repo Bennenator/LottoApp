@@ -247,6 +247,20 @@ if st.session_state.loggedIn == True:
                 if st.form_submit_button("Submit") and delete_type:
                     AdminDB.delete_one({"ticket_type": delete_type.split(" - ")[0]})
                     st.write("Ticket deleted!")
+            
+            this_ticket_list = []
+            for ticket in AdminDB.find():
+                this_ticket_list.append(f"{ticket['ticket_type']}")
+            edit_ticket = st.selectbox("Browse/Search Ticket to edit:", this_ticket_list, index=None, placeholder="")
+            chosen_ticket = AdminDB.find_one({"ticket_type": edit_ticket})
+            if edit_ticket:
+                with st.form("editTicket"):
+                    ticket_type = st.text_input("Ticket Type", value=chosen_ticket["ticket_type"])
+                    ticket_price = st.text_input("Ticket Price", value=chosen_ticket["ticket_price"])
+                    ticket_payout = st.text_input("Ticket Payout", value=chosen_ticket["ticket_payout"])
+                    if st.form_submit_button("Submit"):
+                        AdminDB.update_one({"ticket_type": chosen_ticket["ticket_type"]}, {"$set": {"ticket_type": ticket_type, "ticket_price": ticket_price, "ticket_payout": ticket_payout}})
+                        st.write("Ticket updated!")
     
     # This else block is specifically for the user page
     else:
