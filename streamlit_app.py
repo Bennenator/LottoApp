@@ -4,8 +4,8 @@ import bcrypt
 from datetime import datetime, timedelta
 
 # Connect to the MongoDB server
-# Use streamlit secrets to hide this...
-uri = st.secrets["DB_URI"]
+# Need to use streamlit secrets to hide this...
+uri = "mongodb+srv://brodes02:ulLJgnhbeUIH0mFf@cluster0.dqzu3tl.mongodb.net/?retryWrites=true&w=majority"
 # Initialize the mongodb client
 client = MongoClient(uri)
 
