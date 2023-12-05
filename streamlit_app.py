@@ -34,7 +34,6 @@ if "redeemingTicket" not in st.session_state:
 # This helper function can be used as a callback on buttons to update states if you need to.
 # Takes in a dictionary of key-value pairs and updates the session state accordingly
 def callbackUpdater(key_value_dict: dict):
-    print(key_value_dict)
     for key, value in key_value_dict.items():
         st.session_state[key] = value
 
@@ -127,9 +126,19 @@ if st.session_state.loggedIn == True:
         st.button("Logout", on_click=callbackUpdater, args=[{"Username":None, "loggedIn":False, "admin":False}])
 
         if st.session_state.admin == True:
+            
+            with st.form("makeAdmin"):
+                chosen_user = st.text_input("Enter username of user to become an admin user:")
+                found_user = UsersDB.find_one({"username": chosen_user})
+                if st.form_submit_button("Submit"):
+                    if found_user:
+                        UsersDB.update_one({"username": chosen_user}, {"$set": {"admin": True}})
+                        st.write("User updated!")
+                    else:
+                        st.write("User not found!")
             checked = st.toggle("Delete data?")
             if checked:
-                if st.button("CLEAR DATA", on_click=mongoDBhandler, args=[["tickets", "drawings", "winners"], "Delete"]):
+                if st.button("CLEAR TICKET DATA", on_click=mongoDBhandler, args=[["tickets", "drawings", "winners"], "Delete"]):
                     st.write("Data cleared!")
 
     # This if block is specifically for the admin page
